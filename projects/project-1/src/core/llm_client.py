@@ -1,10 +1,11 @@
 import os
 import logging
-from typing import Optional
+from typing import Optional, List, Dict, Union
 
 from dotenv import load_dotenv
 import instructor
-from openai import AzureOpenAI, ChatCompletion
+from openai import AzureOpenAI
+from openai.types.chat import ChatCompletion  # tipo correto no SDK v1+
 
 # Carrega as variáveis de ambiente do arquivo .env da raiz do projeto 1
 load_dotenv()
@@ -22,7 +23,7 @@ class AzureModel:
     def __init__(
         self,
         temperature: float = 0.3,
-        max_tokens: int = 1024,
+        max_tokens: int = 2048,
         endpoint: Optional[str] = None,
         api_key: Optional[str] = None,
         deployment: Optional[str] = None,
@@ -57,34 +58,81 @@ class AzureModel:
             self.client = instructor.from_openai(base_client)
             self._base_client = base_client
             logger.info("Cliente Azure OpenAI inicializado com sucesso.")
-        except Exception as e:
+        except Exception:
             logger.exception("Falha ao inicializar o cliente Azure OpenAI.")
             raise
 
-    def invoke(self, prompt: str, max_tokens: Optional[int] = None) -> ChatCompletion:
+    def invoke(
+        self,
+        prompt: Optional[str] = None,
+        messages: Optional[List[Dict[str, str]]] = None,
+        system_prompt: Optional[str] = None,
+        max_tokens: Optional[int] = None,
+    ) -> ChatCompletion:
         """
-        Envia um único prompt para o modelo e retorna a resposta completa.
+        Chama o modelo no formato Chat Completions.
+
+        Você pode usar de 2 formas:
+        1) invoke(prompt="...") -> atalho (vira um message de user)
+        2) invoke(messages=[{"role":"system","content":"..."}, {"role":"user","content":"..."}])
 
         Args:
-            prompt: O texto a ser enviado para o modelo.
-            max_tokens: O número máximo de tokens para a resposta (opcional).
+            prompt: Texto simples (atalho).
+            messages: Lista de mensagens no formato chat (recomendado).
+            system_prompt: Opcional. Se fornecido e messages não tiver 'system', ele será inserido.
+            max_tokens: Número máximo de tokens (opcional). (Internamente, pode virar max_completion_tokens)
 
         Returns:
-            O objeto de resposta da API da OpenAI.
+            O objeto de resposta da API da OpenAI (ChatCompletion).
         """
-        logger.info(f"Invocando modelo '{self.deployment}' com um prompt.")
+        if messages is None:
+            if prompt is None:
+                raise ValueError("Você deve fornecer `prompt` ou `messages`.")
+            messages = [{"role": "user", "content": prompt}]
+
+        # Se system_prompt foi passado e não existe uma msg system, insere no começo
+        if system_prompt:
+            has_system = any(m.get("role") == "system" for m in messages)
+            if not has_system:
+                messages = [{"role": "system", "content": system_prompt}] + messages
+
+        token_limit = max_tokens or self.max_tokens
+
+        logger.info(f"Invocando modelo '{self.deployment}' no modo chat.")
         try:
+            # ✅ Tentativa 1: modelos como gpt-4o (Azure) exigem max_completion_tokens
             response = self._base_client.chat.completions.create(
                 model=self.deployment,
-                messages=[{"role": "user", "content": prompt}],
+                messages=messages,
                 temperature=self.temperature,
-                max_tokens=max_tokens or self.max_tokens,
+                max_completion_tokens=token_limit,
             )
             logger.info("Resposta recebida do modelo.")
             return response
 
         except Exception as e:
-            logger.exception(
-                f"Erro durante a chamada para o modelo '{self.deployment}'."
-            )
+            # ✅ Fallback: alguns modelos/rotas antigas ainda usam max_tokens
+            err_text = str(e).lower()
+
+            # Se o erro for especificamente sobre parâmetro não suportado
+            if "unsupported parameter" in err_text and "max_completion_tokens" in err_text:
+                logger.warning(
+                    "Modelo não suporta max_completion_tokens; tentando com max_tokens (fallback)."
+                )
+                response = self._base_client.chat.completions.create(
+                    model=self.deployment,
+                    messages=messages,
+                    temperature=self.temperature,
+                    max_tokens=token_limit,
+                )
+                logger.info("Resposta recebida do modelo (fallback).")
+                return response
+
+            # Se o erro for sobre max_tokens não suportado, deixa explícito no log
+            if "unsupported parameter" in err_text and "max_tokens" in err_text:
+                logger.error(
+                    "Este modelo não suporta max_tokens. Use max_completion_tokens (já tentamos)."
+                )
+
+            logger.exception(f"Erro durante a chamada para o modelo '{self.deployment}'.")
             raise
