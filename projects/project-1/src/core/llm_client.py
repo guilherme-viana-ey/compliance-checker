@@ -22,7 +22,7 @@ class AzureModel:
     def __init__(
         self,
         temperature: float = 0.3,
-        max_tokens: int = 4096,
+        max_tokens: int = 1024,
         endpoint: Optional[str] = None,
         api_key: Optional[str] = None,
         deployment: Optional[str] = None,
