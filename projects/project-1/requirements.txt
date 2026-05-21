@@ -4,7 +4,3 @@ pydantic
 python-dotenv
 openai
 instructor
-
-# --- dev / test ---
-pytest
-httpx
