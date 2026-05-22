@@ -1,166 +1,135 @@
-# Projeto 1 – API Inteligente de Análise de Conformidade
+# Decisões de Arquitetura — Compliance Checker API
 
-**Objetivo:** Construir um **Serviço Especialista** em formato de API REST. Este serviço simula um analista de compliance, fornecendo uma análise automatizada de recomendações de investimento.
-
----
-
-## 📝 Cenário de Negócio (FSO - Financial Services Office)
-
-**A Dor:** Analistas de compliance gastam um tempo enorme revisando manualmente comunicações para garantir a adequação ao perfil de risco do cliente. O processo é lento, caro e sujeito a falhas.
-
-**Nossa Solução (Fase 1):** Vamos construir o **"Compliance Checker API"**, um serviço que recebe uma recomendação de investimento e usa um LLM para fazer uma análise inicial, identificando potenciais violações. Este serviço será a principal ferramenta do nosso futuro agente autônomo.
-
-## ⚙️ Configuração do Ambiente e Conexão com o LLM
-
-Para que nossa API se comunique com o modelo de linguagem (LLM) de forma segura e robusta, vamos centralizar a lógica de conexão em um cliente reutilizável.
-
-### 1. Crie o arquivo `.env`
-
-Na raiz desta pasta (`projects/project-1/`), crie um arquivo chamado `.env`. Ele guardará suas credenciais de forma segura, seguindo o padrão da biblioteca `openai`.
-
-```ini
-# projects/project-1/.env
-AZURE_OPENAI_ENDPOINT="seu-endpoint-aqui"
-AZURE_OPENAI_KEY="sua-chave-aqui"
-AZURE_OPENAI_API_VERSION="2024-06-01"
-AZURE_DEPLOYMENT_NAME="seu-deployment-name-aqui"
-```
-**Importante:** Lembre-se de adicionar o arquivo `.env` ao seu `.gitignore` para nunca enviar suas credenciais para o repositório.
-
-### 2. Acessando as Configurações no Código
-
-Criamos uma classe `AzureModel` no arquivo `src/core/llm_client.py` que encapsula toda a lógica de conexão. Agora, em outros lugares do seu código, como nos seus serviços, você pode simplesmente importar e usar esta classe.
-
-**Exemplo de implementação em `src/services/compliance_service.py`:**
-
-```python
-from ..core.llm_client import AzureModel
-from ..api.schemas import AnalysisResult, AnalysisRequest # Exemplo de schemas
-
-def analyze_recommendation(request: AnalysisRequest) -> AnalysisResult:
-    """
-    Usa o cliente LLM para analisar uma recomendação de investimento.
-    """
-    # 1. Instancia o cliente. As configurações são carregadas do .env automaticamente.
-    llm_client = AzureModel()
-
-    # 2. Cria um prompt estruturado para guiar o modelo.
-    prompt = f"""
-    Analise a seguinte recomendação de investimento: '{request.text}'.
-    Verifique se ela é adequada para um cliente com perfil de risco '{request.client_profile}'.
-    Retorne sua análise.
-    """
-
-    # 3. Invoca o modelo.
-    try:
-        response = llm_client.invoke(prompt=prompt)
-        
-        # Aqui você adicionaria a lógica para processar a resposta do LLM
-        # e transformá-la no schema de resultado `AnalysisResult`.
-        # Por exemplo, usando a biblioteca `instructor` para extração de dados.
-        
-        raw_content = response.choices[0].message.content
-        
-        # Exemplo simples de retorno (a ser refinado)
-        return AnalysisResult(
-            is_compliant= "não" not in raw_content.lower(),
-            reason=raw_content,
-            mentioned_products=[]
-        )
-
-    except Exception as e:
-        print(f"Erro ao chamar o LLM: {e}")
-        # Em um caso real, você retornaria uma resposta de erro HTTP.
-        return AnalysisResult(
-            is_compliant=False,
-            reason=f"Falha ao processar a análise: {e}",
-            mentioned_products=[]
-        )
-```
-
-## 🚀 Como Começar: Guia Rápido
-
-1.  **Setup do Ambiente:** Crie e ative um ambiente virtual Python na pasta `projects/project-1`.
-    ```bash
-    python -m venv .venv
-    # Windows: .\.venv\Scripts\Activate.ps1 | macOS/Linux: source .venv/bin/activate
-    ```
-
-2.  **Instalar Dependências:** Crie um arquivo `requirements.txt` com as bibliotecas abaixo e execute `pip install -r requirements.txt`.
-    ```
-    fastapi
-    uvicorn[standard]
-    pydantic
-    python-dotenv
-    openai
-    instructor
-    ```
-
-3.  **Desenvolver a API:** Siga a estrutura de pastas proposta, implementando a lógica no `main.py`, `services/` e `api/schemas.py`.
-
-4.  **Testar:** Execute `uvicorn src.main:app --reload` e use a interface do Swagger UI em `http://127.0.0.1:8000/docs` para testar sua API.
-
-## 🏛️ Estrutura do Projeto
-
-Para manter nosso código organizado e escalável, seguimos uma estrutura de pastas clara:
-
-```
-.
-├── .env                # Arquivo para suas credenciais (NÃO versionado)
-├── .gitignore          # Arquivos e pastas ignorados pelo Git
-├── Dockerfile          # Define a imagem Docker da nossa API
-├── README.md           # Este guia que você está lendo
-├── requirements.txt    # Dependências Python do projeto
-├── data/               # Para dados de entrada/saída, se necessário
-├── docs/               # Documentação do projeto (arquitetura, decisões)
-├── knowledge_base/     # Base de conhecimento para o RAG (Projeto 2)
-├── src/                # Onde todo o nosso código-fonte Python vive
-│   ├── __init__.py
-│   ├── main.py         # Ponto de entrada da API (FastAPI app)
-│   ├── api/            # Módulos relacionados à API (endpoints, schemas)
-│   ├── core/           # Configurações centrais e lógica de negócio principal
-│   ├── services/       # Lógica de serviço (ex: chamar o LLM)
-│   └── ...             # Outros módulos como `rag/`, `agents/`
-└── tests/              # Testes automatizados
-```
-
--   **`src/`**: O coração da aplicação. Todo o código Python vai aqui.
--   **`src/main.py`**: Define e configura a aplicação FastAPI. É o ponto de entrada que o `uvicorn` executa.
--   **`src/api/`**: Contém os endpoints da API e os `schemas` (modelos Pydantic) que definem os contratos de dados.
--   **`src/services/`**: Contém a lógica de negócio desacoplada da API. Por exemplo, a função que chama o LLM.
--   **`docs/`**: Para toda a documentação que não é o README. Ideal para diagramas de arquitetura e documentos de decisão.
--   **`tests/`**: Onde os testes unitários e de integração devem ser criados.
-
-## ✅ Entregáveis
-
-Para concluir este projeto, você deverá entregar:
-
-1.  **API Funcional e Documentada:**
-    - Um endpoint `POST /analyze` que recebe um texto.
-    - A API deve retornar uma resposta JSON estruturada, validada com Pydantic, contendo no mínimo:
-      - `is_compliant` (boolean)
-      - `reason` (string)
-      - `mentioned_products` (list)
-    - A documentação da API deve ser gerada automaticamente pelo FastAPI (via OpenAPI/Swagger).
-
-2.  **Dockerfile:**
-    - Um `Dockerfile` funcional que empacota a aplicação FastAPI, instala as dependências e a executa.
-
-3.  **Contratos Versionados:**
-    - Os schemas Pydantic que definem os contratos de request e response da sua API devem estar claramente definidos no diretório `src/api/schemas/`.
-
-4.  **Documento de Decisões Técnicas:**
-    - Um breve resumo no arquivo `docs/decisions.md` explicando as principais escolhas de design. Por exemplo: "Por que usamos Pydantic para forçar a saída do LLM?"
-
-## 🚀 Como Começar
-
-1.  **Setup do Ambiente:** Crie e ative um ambiente virtual Python.
-2.  **Instalar Dependências:** Instale `fastapi`, `uvicorn`, e a biblioteca do seu LLM de preferência (ex: `openai`).
-3.  **Estrutura do Código:** Comece a desenvolver sua lógica no arquivo `src/main.py` e organize os schemas em `src/api/schemas/`.
-4.  **Desenvolver a API:** Crie o endpoint `/analyze` e a lógica de serviço que interage com o LLM.
-5.  **Testar:** Use a interface do Swagger UI (`/docs`) para testar sua API interativamente.
-6.  **Dockerizar:** Escreva e teste seu `Dockerfile`.
+Este documento registra as principais escolhas técnicas do Projeto 1, com motivação e alternativas consideradas. Serve de referência para revisões futuras e para os Projetos 2 (RAG) e 3 (Agente), que vão se apoiar nesta base.
 
 ---
 
-Este projeto é a fundação para os próximos. Uma API bem projetada aqui tornará a integração com o pipeline RAG (Projeto 2) e com o Agente (Projeto 3) muito mais simples.
+## 1. FastAPI como framework web
+
+**Decisão:** usar FastAPI em vez de Flask ou Django.
+
+**Por quê:**
+- Geração automática de OpenAPI/Swagger a partir dos schemas Pydantic — entregável da API "documentada" sai de graça.
+- Validação de request/response baseada em Pydantic, alinhada com o resto do stack (LLM estruturado via `instructor`).
+- Suporte nativo a `async`, importante quando as chamadas ao LLM forem o gargalo.
+- Performance suficiente (ASGI + Starlette) sem o overhead de configuração do Django.
+
+**Alternativas consideradas:** Flask (síncrono, validação manual), Django REST (excesso de funcionalidades para um microsserviço focado).
+
+---
+
+## 2. Pydantic como contrato único da API e da saída do LLM
+
+**Decisão:** os mesmos modelos Pydantic (`AnalysisRequest`, `AnalysisResult`) definem tanto o contrato HTTP quanto a estrutura que o LLM precisa devolver.
+
+**Por quê:**
+- **Fonte única da verdade.** Se o contrato muda, muda em um lugar só — request, response e prompt ficam sincronizados.
+- **Validação automática nos dois extremos.** O FastAPI rejeita payloads inválidos do cliente; o `instructor` rejeita respostas inválidas do LLM. O código de negócio só lida com dados já validados.
+- **Documentação grátis.** Descrições e `examples` nos campos aparecem no Swagger UI.
+
+**Trade-off:** acopla o formato da saída do LLM ao contrato externo. Se a API precisar evoluir sem mexer no prompt (ou vice-versa), será necessário separar em dois modelos.
+
+---
+
+## 3. `instructor` para forçar saída estruturada do LLM
+
+**Decisão:** usar `instructor.from_openai(...)` para que o LLM devolva diretamente uma instância de `AnalysisResult`, em vez de fazer parse manual do texto.
+
+**Por quê:**
+- Elimina o ciclo "pede JSON → recebe markdown com ```json``` → extrai com regex → tenta `json.loads` → trata erro".
+- O `instructor` faz retry automático quando o modelo devolve algo que não casa com o schema.
+- Saída tipada já no consumidor — sem `dict` solto rodando pela aplicação.
+
+**Mitigação de risco:** `compliance_service.analyze_recommendation()` mantém um **fallback em três camadas** caso o `instructor` falhe:
+1. Chamada padrão pedindo JSON no prompt.
+2. Extração do primeiro objeto JSON via regex.
+3. Heurística textual (procura por "não" na resposta) + `AnalysisResult` de erro como último recurso.
+
+Assim, garantimos que o endpoint sempre devolve um `AnalysisResult` válido, mesmo em condições adversas.
+
+---
+
+## 4. Wrapper `AzureModel` em `src/core/llm_client.py`
+
+**Decisão:** isolar toda a comunicação com o Azure OpenAI numa classe única, em vez de instanciar o SDK em cada serviço.
+
+**Por quê:**
+- **Centraliza configuração.** As variáveis de ambiente são lidas em um único ponto; falha rápido (com mensagem clara) se algo faltar.
+- **Centraliza compatibilidade.** O método `invoke()` já trata a diferença entre `max_completion_tokens` (modelos novos, ex.: gpt-4o no Azure) e `max_tokens` (modelos/rotas antigas) com fallback automático — o serviço de negócio não precisa saber disso.
+- **Trocabilidade.** Se um dia mudarmos para OpenAI direto, Anthropic ou Bedrock, a alteração fica restrita a esta classe. Os serviços continuam chamando `AzureModel().invoke(...)` ou um cliente equivalente.
+- **Testabilidade.** É trivial passar um mock de `AzureModel` para `compliance_service` em testes unitários.
+
+---
+
+## 5. Separação em camadas: `api/`, `services/`, `core/`
+
+**Decisão:** organizar o código em três camadas com responsabilidades distintas.
+
+| Camada      | Responsabilidade                                                  |
+|-------------|-------------------------------------------------------------------|
+| `api/`      | Schemas (contratos HTTP) — Pydantic puro, sem lógica de negócio   |
+| `services/` | Lógica de negócio (montar prompt, orquestrar LLM, tratar erros)   |
+| `core/`     | Infra reutilizável (cliente LLM, configuração)                    |
+
+**Por quê:**
+- O endpoint em `main.py` fica magro — basicamente delega para o serviço.
+- O serviço pode ser chamado de outros contextos (CLI, agente do Projeto 3, job batch) sem arrastar o FastAPI junto.
+- Facilita testar a lógica de negócio sem subir um servidor HTTP.
+
+---
+
+## 6. `python-dotenv` + `.env` para configuração
+
+**Decisão:** credenciais via arquivo `.env` carregado por `python-dotenv`, e não hard-coded ou passadas por flag.
+
+**Por quê:**
+- Padrão do ecossistema Python — qualquer dev já espera encontrar um `.env.example` ou instruções de `.env`.
+- `.env` no `.gitignore` evita vazamento acidental de chaves.
+- Funciona igual em desenvolvimento local e dentro do container Docker (via `--env-file .env`).
+
+**Para produção:** o `.env` deve ser substituído por um secret manager (Azure Key Vault, AWS Secrets Manager, variáveis injetadas pelo orquestrador). O `AzureModel` aceita os valores via construtor justamente para permitir essa troca sem mexer no código.
+
+---
+
+## 7. Containerização com `python:3.11-slim`
+
+**Decisão:** imagem base `python:3.11-slim`, sem multi-stage build neste momento.
+
+**Por quê:**
+- `slim` reduz o tamanho da imagem sem o trabalho de manter uma base `alpine` (que costuma quebrar wheels de pacotes científicos).
+- Versão Python fixa (3.11) evita surpresas com mudanças de minor version.
+- Build simples e direto: `COPY requirements.txt` → `pip install` → `COPY .` → `CMD uvicorn`.
+
+**Evolução futura:**
+- Multi-stage build com etapa separada de `pip install` para diminuir a imagem final.
+- Usuário não-root no container.
+- Healthcheck no `Dockerfile` apontando para `GET /`.
+
+---
+
+## 8. Health check em `GET /`
+
+**Decisão:** expor um endpoint mínimo `GET /` retornando status fixo, separado da rota de negócio.
+
+**Por quê:**
+- Probes de Kubernetes/load balancer precisam de uma rota leve e sem dependências externas (não pode bater no LLM a cada 5s).
+- Smoke test trivial: se `GET /` responde 200, o servidor subiu corretamente.
+
+---
+
+## 9. Pastas reservadas para os próximos projetos
+
+**Decisão:** já criar `knowledge_base/`, `src/rag/` e `src/agents/` mesmo vazios.
+
+**Por quê:**
+- Sinaliza o roadmap diretamente na estrutura do repo.
+- Quando o Projeto 2 (RAG) começar, o ponto de extensão já está definido — sem precisar reabrir discussão sobre onde colocar o código.
+
+---
+
+## Decisões em aberto
+
+- **Logging estruturado** (JSON) — hoje usamos `logging` padrão; revisar quando integrarmos a stack de observabilidade.
+- **Rate limiting** no endpoint `/analyze` — necessário antes de expor publicamente, para proteger a cota do Azure OpenAI.
+- **Cache de respostas** para prompts idênticos — pode reduzir custo significativamente em cenários de re-análise.
+- **Versionamento da API** (`/v1/analyze`) — adiar até a primeira mudança incompatível de contrato.
