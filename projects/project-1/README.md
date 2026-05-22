@@ -1,10 +1,3 @@
-# Decisões de Arquitetura — Compliance Checker API
-
-Este documento registra as principais escolhas técnicas do Projeto 1, com motivação e alternativas consideradas. Serve de referência para revisões futuras e para os Projetos 2 (RAG) e 3 (Agente), que vão se apoiar nesta base.
-
----
-
-## 1. FastAPI como framework web
 # Compliance Checker API — Project 1
 
 API REST que atua como um **analista de compliance automatizado**. Recebe uma recomendação de investimento e o perfil de risco do cliente, e devolve uma análise estruturada indicando se a recomendação é adequada, com justificativa e produtos financeiros mencionados.
