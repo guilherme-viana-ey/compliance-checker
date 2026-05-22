@@ -206,16 +206,6 @@ O `Dockerfile` usa `python:3.11-slim`, instala as dependências e sobe o `uvicor
 
 ---
 
-## Testes
-
-Os testes ficam em `tests/`. Para executar (com `pytest` instalado):
-
-```bash
-pip install pytest
-pytest
-```
-
----
 
 ## Próximos passos
 
