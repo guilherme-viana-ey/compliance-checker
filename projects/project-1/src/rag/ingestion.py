@@ -1,69 +1,80 @@
 """
 Pipeline de ingestão RAG:
-- lê PDFs da knowledge_base
+- lê arquivos da knowledge_base
 - faz chunking
-- gera embeddings
+- gera embeddings locais (offline)
 - armazena no ChromaDB
 
-Idempotente: pode rodar várias vezes sem duplicar dados
+Idempotente e robusto.
 """
 
-import os
 import uuid
 from pathlib import Path
 
 import chromadb
 from chromadb.config import Settings
+from chromadb.utils import embedding_functions
 from langchain_text_splitters import RecursiveCharacterTextSplitter
-
 from pypdf import PdfReader
 
-from chromadb.utils import embedding_functions
-
-embedding_function = embedding_functions.SentenceTransformerEmbeddingFunction(
-    model_name="all-MiniLM-L6-v2"
-)
-
+# =========================
 # ✅ CONFIG
+# =========================
 BASE_DIR = Path(__file__).resolve().parents[2]
 KNOWLEDGE_BASE = BASE_DIR / "knowledge_base"
 DB_DIR = BASE_DIR / "chroma_db"
 
+COLLECTION_NAME = "compliance_knowledge"
+
 CHUNK_SIZE = 500
 CHUNK_OVERLAP = 100
 
+# ✅ Embedding local (offline)
+embedding_function = embedding_functions.SentenceTransformerEmbeddingFunction(
+    # 👉 Ajuste para path local se estiver offline corporativo:
+    # model_name="models/all-MiniLM-L6-v2"
+    model_name="models/all-MiniLM-L6-v2"
+)
 
-# ✅ CLIENTE CHROMA
-def get_chroma_collection():
-    client = chromadb.Client(
+# =========================
+# ✅ CHROMA CLIENT
+# =========================
+def get_chroma_client():
+    return chromadb.Client(
         Settings(persist_directory=str(DB_DIR))
     )
 
-    collection = client.get_or_create_collection(
-        name="compliance_knowledge"
+
+def get_collection(client):
+    return client.get_or_create_collection(
+        name=COLLECTION_NAME,
+        embedding_function=embedding_function,  # ✅ CRÍTICO
     )
 
-    return client, collection
 
-
-# ✅ LEITURA DE PDF
+# =========================
+# ✅ LOADERS
+# =========================
 def load_pdf(file_path: Path) -> str:
     reader = PdfReader(str(file_path))
     text = ""
 
     for page in reader.pages:
-        text += page.extract_text() + "\n"
+        page_text = page.extract_text()
+        if page_text:
+            text += page_text + "\n"
 
     return text
 
 
-# ✅ LOAD DE TXT (caso tenha perfil de risco)
 def load_txt(file_path: Path) -> str:
     with open(file_path, "r", encoding="utf-8") as f:
         return f.read()
 
 
-# ✅ SPLIT EM CHUNKS
+# =========================
+# ✅ CHUNKING
+# =========================
 def split_text(text: str):
     splitter = RecursiveCharacterTextSplitter(
         chunk_size=CHUNK_SIZE,
@@ -72,9 +83,11 @@ def split_text(text: str):
     return splitter.split_text(text)
 
 
-# ✅ INGESTÃO PRINCIPAL
+# =========================
+# ✅ INGESTION
+# =========================
 def ingest():
-    client, collection = get_chroma_collection()
+    client = get_chroma_client()
 
     print("🚀 Iniciando ingestão...")
 
@@ -82,13 +95,18 @@ def ingest():
 
     for file_path in KNOWLEDGE_BASE.iterdir():
 
-        if file_path.suffix.lower() == ".pdf":
-            text = load_pdf(file_path)
+        try:
+            if file_path.suffix.lower() == ".pdf":
+                text = load_pdf(file_path)
 
-        elif file_path.suffix.lower() == ".txt":
-            text = load_txt(file_path)
+            elif file_path.suffix.lower() == ".txt":
+                text = load_txt(file_path)
 
-        else:
+            else:
+                continue
+
+        except Exception as e:
+            print(f"⚠️ Erro ao ler {file_path.name}: {e}")
             continue
 
         chunks = split_text(text)
@@ -96,18 +114,26 @@ def ingest():
         print(f"📄 {file_path.name} → {len(chunks)} chunks")
 
         for i, chunk in enumerate(chunks):
-            documents.append({
-                "id": str(uuid.uuid4()),
-                "content": chunk,
-                "metadata": {
-                    "source": file_path.name,
-                    "chunk_id": i,
+            documents.append(
+                {
+                    "id": str(uuid.uuid4()),
+                    "content": chunk,
+                    "metadata": {
+                        "source": file_path.name,
+                        "chunk_id": i,
+                        "file_type": file_path.suffix,
+                        "chunk_size": len(chunk),
+                    },
                 }
-            })
+            )
 
-    # ✅ evitar duplicação (simples estratégia: limpar antes)
-    client.delete_collection("compliance_knowledge")
-    collection = client.get_or_create_collection(name="compliance_knowledge")
+    # ✅ Idempotência: recriar coleção
+    try:
+        client.delete_collection(COLLECTION_NAME)
+    except Exception:
+        pass
+
+    collection = get_collection(client)
 
     print("💾 Salvando no ChromaDB...")
 
@@ -120,9 +146,11 @@ def ingest():
     client.persist()
 
     print("✅ Ingestão concluída!")
-    print(f"Total de chunks: {len(documents)}")
+    print(f"📊 Total de chunks: {len(documents)}")
 
 
+# =========================
 # ✅ ENTRYPOINT
+# =========================
 if __name__ == "__main__":
     ingest()
