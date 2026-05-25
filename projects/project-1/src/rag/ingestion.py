@@ -14,8 +14,15 @@ from pathlib import Path
 
 import chromadb
 from chromadb.config import Settings
-from langchain.text_splitter import RecursiveCharacterTextSplitter
+from langchain_text_splitters import RecursiveCharacterTextSplitter
+
 from pypdf import PdfReader
+
+from chromadb.utils import embedding_functions
+
+embedding_function = embedding_functions.SentenceTransformerEmbeddingFunction(
+    model_name="all-MiniLM-L6-v2"
+)
 
 # ✅ CONFIG
 BASE_DIR = Path(__file__).resolve().parents[2]
@@ -99,7 +106,8 @@ def ingest():
             })
 
     # ✅ evitar duplicação (simples estratégia: limpar antes)
-    collection.delete(where={})
+    client.delete_collection("compliance_knowledge")
+    collection = client.get_or_create_collection(name="compliance_knowledge")
 
     print("💾 Salvando no ChromaDB...")
 
