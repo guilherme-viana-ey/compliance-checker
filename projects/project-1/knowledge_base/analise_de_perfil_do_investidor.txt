@@ -1,0 +1,51 @@
+# Política de Adequação de Investimentos ao Perfil do Investidor (PAI) - v1.2
+
+## 1. Objetivo
+Este documento estabelece as diretrizes para a classificação de perfis de risco de investidores e a adequação dos produtos de investimento recomendados a cada perfil. O objetivo é garantir que as recomendações estejam alinhadas com a tolerância ao risco e os objetivos de cada cliente.
+
+## 2. Definição dos Perfis de Risco
+
+### 2.1. Perfil Conservador
+- **Descrição:** O investidor com perfil conservador prioriza a preservação do capital e busca segurança, aceitando uma rentabilidade menor em troca de baixo risco e alta liquidez.
+- **Tolerância a Risco:** Muito baixa. Não tolera perdas, mesmo que temporárias.
+- **Produtos Adequados:**
+  - Tesouro Selic (LFT)
+  - CDBs de bancos de primeira linha com liquidez diária.
+  - Fundos de Renda Fixa Simples ou com baixa exposição a crédito privado.
+  - LCI/LCA com garantia do FGC.
+- **Produtos Inadequados/Restritos:**
+  - Renda Variável (Ações, Fundos de Ações).
+  - Fundos Multimercado com exposição a risco.
+  - Derivativos, Criptoativos.
+  - Investimentos no exterior.
+
+### 2.2. Perfil Moderado
+- **Descrição:** O investidor com perfil moderado busca um equilíbrio entre segurança e rentabilidade. Aceita correr algum risco em busca de retornos superiores aos da renda fixa tradicional, mas ainda preza pela proteção de parte do seu patrimônio.
+- **Tolerância a Risco:** Média. Tolera flutuações de curto prazo e pequenas perdas potenciais em uma parte da carteira.
+- **Produtos Adequados:**
+  - Todos os produtos do perfil Conservador.
+  - Fundos Multimercado com risco controlado.
+  - Fundos de Investimento Imobiliário (FIIs).
+  - Ações de empresas consolidadas e boas pagadoras de dividendos (Blue Chips).
+  - Exposição limitada (até 20% do portfólio) em Renda Variável.
+  - Ouro e outros ativos de proteção.
+- **Produtos Inadequados/Restritos:**
+  - Derivativos para especulação.
+  - Criptoativos (exceto via fundos com exposição mínima e controlada).
+  - Ações de empresas de alto risco (Small Caps).
+
+### 2.3. Perfil Arrojado (ou Agressivo)
+- **Descrição:** O investidor com perfil arrojado busca alta rentabilidade e compreende que, para isso, precisa assumir riscos elevados. Tem conhecimento do mercado financeiro e tolera grandes flutuações e a possibilidade de perda de parte do capital em busca de ganhos expressivos no longo prazo.
+- **Tolerância a Risco:** Alta.
+- **Produtos Adequados:**
+  - Todos os produtos dos perfis Conservador e Moderado.
+  - Ações (mercado nacional e internacional, incluindo Small Caps).
+  - Fundos de Ações, Fundos Cambiais.
+  - Derivativos (Opções e Futuros) para especulação ou hedge.
+  - Criptoativos.
+  - Investimentos no exterior.
+- **Produtos Inadequados/Restritos:**
+  - Não há produtos inadequados, mas a concentração deve ser gerenciada. A alocação em um único ativo de alto risco não deve comprometer a totalidade do patrimônio do cliente.
+
+## 3. Revisão de Perfil
+O perfil de risco do cliente (Suitability) deve ser reavaliado a cada 24 meses ou sempre que houver uma mudança significativa em seus objetivos ou situação financeira.

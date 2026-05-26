@@ -20,6 +20,27 @@ class AnalysisRequest(BaseModel):
     )
 
 
+class SourceReference(BaseModel):
+    """Referência a um trecho da base de conhecimento usado na análise."""
+
+    source_document: str = Field(
+        ...,
+        description="Nome do arquivo de origem do trecho (ex.: resol_030_cvm.pdf).",
+    )
+    source_chunk_id: int = Field(
+        ...,
+        description="Índice do chunk dentro do documento de origem.",
+    )
+    relevance_score: float = Field(
+        ...,
+        description="Score de relevância pós re-ranking (maior = mais relevante).",
+    )
+    excerpt: str = Field(
+        ...,
+        description="Trecho do documento usado como contexto na análise.",
+    )
+
+
 class AnalysisResult(BaseModel):
     """Resultado estruturado da análise de conformidade."""
 
@@ -34,4 +55,8 @@ class AnalysisResult(BaseModel):
     mentioned_products: List[str] = Field(
         default_factory=list,
         description="Produtos financeiros citados na recomendação.",
+    )
+    sources: List[SourceReference] = Field(
+        default_factory=list,
+        description="Trechos da base de conhecimento que embasaram a análise.",
     )
