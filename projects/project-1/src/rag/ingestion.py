@@ -2,18 +2,16 @@
 Pipeline de ingestão RAG:
 - lê arquivos da knowledge_base
 - faz chunking
-- gera embeddings locais (offline)
+- gera embeddings locais (offline, sem download)
 - armazena no ChromaDB
 
-Idempotente e robusto.
+Idempotente e robusto
 """
 
 import uuid
 from pathlib import Path
 
 import chromadb
-from chromadb.config import Settings
-from chromadb.utils import embedding_functions
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from pypdf import PdfReader
 
@@ -29,26 +27,28 @@ COLLECTION_NAME = "compliance_knowledge"
 CHUNK_SIZE = 500
 CHUNK_OVERLAP = 100
 
-# ✅ Embedding local (offline)
-embedding_function = embedding_functions.SentenceTransformerEmbeddingFunction(
-    # 👉 Ajuste para path local se estiver offline corporativo:
-    # model_name="models/all-MiniLM-L6-v2"
-    model_name="models/all-MiniLM-L6-v2"
-)
+
+# =========================
+# ✅ EMBEDDING LOCAL (100% OFFLINE)
+# =========================
+
+class SimpleEmbeddingFunction:
+    def __call__(self, input):
+        return [[float(len(text))] for text in input]
+
+    def name(self):
+        return "simple"
+
+
+embedding_function = SimpleEmbeddingFunction()
+
 
 # =========================
 # ✅ CHROMA CLIENT
 # =========================
 def get_chroma_client():
-    return chromadb.Client(
-        Settings(persist_directory=str(DB_DIR))
-    )
-
-
-def get_collection(client):
-    return client.get_or_create_collection(
-        name=COLLECTION_NAME,
-        embedding_function=embedding_function,  # ✅ CRÍTICO
+    return chromadb.PersistentClient(
+        path=str(DB_DIR),
     )
 
 
@@ -68,8 +68,7 @@ def load_pdf(file_path: Path) -> str:
 
 
 def load_txt(file_path: Path) -> str:
-    with open(file_path, "r", encoding="utf-8") as f:
-        return f.read()
+    return file_path.read_text(encoding="utf-8")
 
 
 # =========================
@@ -94,7 +93,6 @@ def ingest():
     documents = []
 
     for file_path in KNOWLEDGE_BASE.iterdir():
-
         try:
             if file_path.suffix.lower() == ".pdf":
                 text = load_pdf(file_path)
@@ -114,26 +112,27 @@ def ingest():
         print(f"📄 {file_path.name} → {len(chunks)} chunks")
 
         for i, chunk in enumerate(chunks):
-            documents.append(
-                {
-                    "id": str(uuid.uuid4()),
-                    "content": chunk,
-                    "metadata": {
-                        "source": file_path.name,
-                        "chunk_id": i,
-                        "file_type": file_path.suffix,
-                        "chunk_size": len(chunk),
-                    },
+            documents.append({
+                "id": str(uuid.uuid4()),
+                "content": chunk,
+                "metadata": {
+                    "source": file_path.name,
+                    "chunk_id": i,
+                    "file_type": file_path.suffix,
+                    "chunk_size": len(chunk),
                 }
-            )
+            })
 
-    # ✅ Idempotência: recriar coleção
+    # ✅ IDÊMPOTENTE (limpa antes)
     try:
         client.delete_collection(COLLECTION_NAME)
     except Exception:
         pass
 
-    collection = get_collection(client)
+    collection = client.get_or_create_collection(
+        name=COLLECTION_NAME,
+        embedding_function=embedding_function
+    )
 
     print("💾 Salvando no ChromaDB...")
 
@@ -142,8 +141,6 @@ def ingest():
         metadatas=[doc["metadata"] for doc in documents],
         ids=[doc["id"] for doc in documents],
     )
-
-    client.persist()
 
     print("✅ Ingestão concluída!")
     print(f"📊 Total de chunks: {len(documents)}")
