@@ -34,4 +34,6 @@ docker-compose.yml
 *.swp
 *.swo
 *~
-.env
+
+# RAG / Vector DB
+chroma_db/
