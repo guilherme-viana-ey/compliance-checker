@@ -1,45 +1,79 @@
-# Compliance Checker API — Project 1
+# Compliance Checker API — Etaoa 2 - RAG Confiável com Re-ranking
 
-API REST que atua como um **analista de compliance automatizado**. Recebe uma recomendação de investimento e o perfil de risco do cliente, e devolve uma análise estruturada indicando se a recomendação é adequada, com justificativa e produtos financeiros mencionados.
+API REST que atua como um **analista de compliance automatizado**. Recebe uma recomendação de investimento e o perfil de risco do cliente, e devolve uma análise estruturada indicando se a recomendação é adequada — agora **fundamentada em documentos oficiais** (ANBIMA, CVM) recuperados via RAG.
 
-Construída com **FastAPI**, **Pydantic** e **Azure OpenAI** (via biblioteca `openai` + `instructor` para saída estruturada).
+Construída com **FastAPI**, **Pydantic**, **ChromaDB** e **Azure OpenAI** (via `openai` + `instructor`).
+
+---
+
+## O que mudou em relação ao Projeto 1
+
+No Projeto 1, as regras de compliance estavam **congeladas no prompt**. Se uma política mudasse, era necessário reescrever e reimplantar o código. A análise também não era auditável — não era possível apontar qual cláusula embasou cada decisão.
+
+No Projeto 2, a API se torna um **Policy-Grounded RAG**:
+
+| | Projeto 1 | Projeto 2 |
+|---|---|---|
+| **Fonte das regras** | Prompt fixo no código | Documentos oficiais (PDF/TXT) |
+| **Auditabilidade** | Nenhuma | Fonte + chunk_id em cada resposta |
+| **Atualização de políticas** | Requer redeploy | Rodar `ingestion.py` novamente |
+| **Qualidade do contexto** | N/A | Re-ranking BM25 + vetorial |
+| **Schema de resposta** | 3 campos | 4 campos + lista de fontes |
 
 ---
 
 ## Como funciona
 
 ```
+                    ┌─────────────────────────────────┐
+                    │  INGESTÃO (offline, sob demanda) │
+                    │                                  │
+                    │  knowledge_base/*.pdf/.txt        │
+                    │         ↓ chunking               │
+                    │  ChromaDB (chroma_db/)           │
+                    └─────────────────────────────────┘
+                                    │
+                                    ▼ (consulta em tempo real)
+
 Cliente HTTP ──POST /analyze──► FastAPI (src/main.py)
                                      │
                                      ▼
-                          compliance_service.analyze_recommendation()
+                     compliance_service.analyze_recommendation()
                                      │
+                          ┌──────────┴──────────┐
+                          ▼                     ▼
+                    retrieval.retrieve()    AzureModel
+                          │                     ▲
+                    Busca vetorial              │
+                    ChromaDB top-20            prompt enriquecido
+                          │                   (Strict Grounding)
+                    Re-ranking BM25 ──────────►│
+                    + cobertura                │
+                    + score vetorial           │
+                          │                     │
+                          └──────────┬──────────┘
                                      ▼
-                     AzureModel (src/core/llm_client.py)
-                                     │
-                                     ▼
-                          Azure OpenAI Chat Completions
-                                     │
-                                     ▼
-                  AnalysisResult validado por Pydantic ──► JSON
+                    AnalysisResult + sources (Pydantic) ──► JSON
 ```
 
 ### Fluxo de uma requisição
 
-1. O endpoint `POST /analyze` recebe um `AnalysisRequest` (`text` + `client_profile`) e o FastAPI já valida o payload com Pydantic.
-2. `compliance_service.analyze_recommendation()` monta o prompt com a recomendação e o perfil do cliente.
-3. **Caminho primário:** chama o modelo via `instructor`, passando `AnalysisResult` como `response_model` — o `instructor` força o LLM a devolver um objeto que respeita o schema.
-4. **Caminho de fallback:** se o `instructor` falhar, faz uma chamada padrão pedindo JSON, extrai o primeiro objeto com regex e, em último caso, aplica uma heurística simples baseada na resposta textual.
-5. O resultado é serializado como `AnalysisResult` e devolvido em JSON.
+1. O endpoint `POST /analyze` recebe um `AnalysisRequest` (`text` + `client_profile`).
+2. `compliance_service` chama `retrieval.retrieve()` com o texto da recomendação como query.
+3. O serviço de recuperação busca os **20 chunks mais próximos** no ChromaDB.
+4. O **re-ranker** reordena os chunks combinando BM25, cobertura de termos e score vetorial — retorna os top-5.
+5. O serviço monta um prompt de **Strict Grounding** com o contexto recuperado.
+6. O LLM é chamado via `instructor` (com fallback em três camadas) e retorna a análise.
+7. A resposta inclui o resultado da análise **e as fontes** usadas (documento + chunk_id).
 
 ### Endpoints
 
-| Método | Rota       | Descrição                                                          |
-|--------|------------|--------------------------------------------------------------------|
-| GET    | `/`        | Health check. Retorna `{"status": "ok", "service": "..."}`         |
-| POST   | `/analyze` | Analisa uma recomendação de investimento contra um perfil de risco |
+| Método | Rota | Descrição |
+|--------|------|-----------|
+| GET | `/` | Health check. Retorna `{"status": "ok"}` |
+| POST | `/analyze` | Analisa uma recomendação com contexto RAG |
 
-Documentação interativa (Swagger UI) disponível em `/docs` e ReDoc em `/redoc`.
+Documentação interativa disponível em `/docs` (Swagger UI) e `/redoc`.
 
 #### Exemplo de request
 
@@ -57,8 +91,22 @@ curl -X POST http://127.0.0.1:8000/analyze \
 ```json
 {
   "is_compliant": false,
-  "reason": "A alocação total em criptomoedas é incompatível com um perfil conservador, que prioriza preservação de capital.",
-  "mentioned_products": ["criptomoedas"]
+  "reason": "A recomendação viola o Art. 12 da Resolução CVM 30, que exige adequação do produto ao perfil do investidor. Criptomoedas são ativos de alto risco, incompatíveis com perfil conservador.",
+  "mentioned_products": ["criptomoedas"],
+  "sources": [
+    {
+      "source_document": "resol_030_cvm.pdf",
+      "source_chunk_id": 12,
+      "relevance_score": 0.8734,
+      "excerpt": "O distribuidor deve verificar a adequação do produto ao perfil do investidor antes de qualquer recomendação..."
+    },
+    {
+      "source_document": "politica_adequacao_investimento_v1.2.txt",
+      "source_chunk_id": 3,
+      "relevance_score": 0.7210,
+      "excerpt": "Investidores conservadores devem ter exposição máxima de 10% em ativos de risco..."
+    }
+  ]
 }
 ```
 
@@ -68,31 +116,42 @@ curl -X POST http://127.0.0.1:8000/analyze \
 
 ```
 projects/project-1/
-├── .env                       # Credenciais (NÃO versionar)
+├── .env                            # Credenciais (NÃO versionar)
 ├── .gitignore
 ├── Dockerfile
 ├── README.md
 ├── requirements.txt
-├── test_llm.py                # Script de sanity check do LLM
-├── data/                      # Dados de entrada/saída
+├── test_llm.py                     # Script de sanity check do LLM
+├── chroma_db/                      # Banco vetorial gerado pela ingestão
+├── data/
 ├── docs/
-│   └── decisions.md           # Decisões de arquitetura
-├── knowledge_base/            # Base de conhecimento (reservada para o Projeto 2 — RAG)
-├── src/
-│   ├── __init__.py
-│   ├── main.py                # FastAPI app + endpoints
-│   ├── api/
-│   │   ├── __init__.py
-│   │   └── schemas.py         # AnalysisRequest, AnalysisResult
-│   ├── core/
-│   │   ├── __init__.py
-│   │   └── llm_client.py      # Wrapper AzureModel (Azure OpenAI + instructor)
-│   ├── services/
-│   │   ├── __init__.py
-│   │   └── compliance_service.py  # Orquestra prompt → LLM → resultado
-│   ├── agents/                # Reservado para o Projeto 3
-│   └── rag/                   # Reservado para o Projeto 2
-└── tests/
+│   └── architecture.md             # Diagrama do fluxo RAG completo
+├── knowledge_base/                 # Documentos oficiais
+│   ├── anbima_codigo_distribuicao_produtos_Investimento.pdf
+│   ├── resol_030_cvm.pdf
+│   ├── politica_adequacao_investimento_v1.2.txt
+│   ├── politica_investimento_agressivo_v1.0.txt
+│   ├── manual_comunicacao_cliente_v1.0.txt
+│   └── analise_de_perfil_do_investidor.txt
+├── notebooks/
+│   └── rag_evaluation.ipynb        # Análise before/after re-ranking
+└── src/
+    ├── __init__.py
+    ├── main.py                     # FastAPI app + endpoints
+    ├── api/
+    │   ├── __init__.py
+    │   └── schemas.py              # AnalysisRequest, AnalysisResult, SourceReference
+    ├── core/
+    │   ├── __init__.py
+    │   └── llm_client.py           # Wrapper AzureModel (imutável)
+    ├── rag/
+    │   ├── __init__.py
+    │   ├── ingestion.py            # Pipeline de ingestão (executável)
+    │   └── retrieval.py            # Busca vetorial + re-ranking
+    ├── services/
+    │   ├── __init__.py
+    │   └── compliance_service.py   # Orquestrador RAG
+    └── agents/                     # Reservado para o Projeto 3
 ```
 
 ---
@@ -103,7 +162,7 @@ projects/project-1/
 
 - Python 3.11+
 - Acesso a um deployment Azure OpenAI (endpoint, chave, deployment name)
-- Opcional: Docker, para rodar via container
+- Opcional: Docker
 
 ### 1. Clonar e entrar na pasta
 
@@ -132,16 +191,20 @@ source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
-Dependências principais (de `requirements.txt`):
+Dependências principais:
 
-| Pacote               | Para quê                                                        |
-|----------------------|-----------------------------------------------------------------|
-| `fastapi`            | Framework web e geração automática do OpenAPI                   |
-| `uvicorn[standard]`  | Servidor ASGI para executar a app                               |
-| `pydantic`           | Validação dos schemas de entrada e saída                        |
-| `python-dotenv`      | Carrega as variáveis do `.env`                                  |
-| `openai`             | SDK oficial — usado no modo `AzureOpenAI`                       |
-| `instructor`         | Força o LLM a devolver objetos Pydantic estruturados            |
+| Pacote | Para quê |
+|--------|----------|
+| `fastapi` | Framework web e geração automática do OpenAPI |
+| `uvicorn[standard]` | Servidor ASGI |
+| `pydantic` | Validação dos schemas de entrada e saída |
+| `python-dotenv` | Carrega variáveis do `.env` |
+| `openai` | SDK oficial Azure OpenAI |
+| `instructor` | Força o LLM a devolver objetos Pydantic estruturados |
+| `chromadb` | Banco de dados vetorial local |
+| `langchain-text-splitters` | Chunking dos documentos |
+| `pypdf` | Leitura de arquivos PDF |
+| `pandas` | Análise de dados no notebook de avaliação |
 
 ### 4. Configurar variáveis de ambiente
 
@@ -154,191 +217,105 @@ AZURE_OPENAI_API_VERSION="2024-06-01"
 AZURE_DEPLOYMENT_NAME="seu-deployment-name"
 ```
 
-> `.env` já deve estar no `.gitignore`. **Nunca** commite credenciais.
-
-### 5. (Opcional) Testar a conexão com o LLM
-
-```bash
-python test_llm.py
-```
-
-Esse script abre um chat REPL simples contra o Azure OpenAI — útil para validar que as credenciais e o deployment estão corretos antes de subir a API.
+> `.env` já está no `.gitignore`. **Nunca** commite credenciais.
 
 ---
 
 ## Como executar
 
-### Modo desenvolvimento (com hot reload)
+### Passo 1 — Rodar a ingestão (necessário antes de subir a API)
 
-A partir de `projects/project-1/`:
+```bash
+python src/rag/ingestion.py
+```
+
+Saída esperada:
+```
+🚀 Iniciando ingestão...
+📄 anbima_codigo_distribuicao_produtos_Investimento.pdf → 301 chunks
+📄 resol_030_cvm.pdf → 50 chunks
+📄 politica_adequacao_investimento_v1.2.txt → 6 chunks
+...
+✅ Ingestão concluída!
+📊 Total de chunks: 369
+```
+
+A ingestão é **idempotente**: pode ser rodada múltiplas vezes sem problemas. Sempre recria a base do zero, garantindo que mudanças nos documentos sejam refletidas.
+
+### Passo 2 — Subir a API
 
 ```bash
 uvicorn src.main:app --reload
 ```
 
 Acesse:
-
 - API: http://127.0.0.1:8000
 - Swagger UI: http://127.0.0.1:8000/docs
 - ReDoc: http://127.0.0.1:8000/redoc
 
-### Modo produção
+### Passo 3 — (Opcional) Rodar o notebook de avaliação
 
 ```bash
-uvicorn src.main:app --host 0.0.0.0 --port 8000
+pip install jupyter
+jupyter notebook notebooks/rag_evaluation.ipynb
 ```
+
+O notebook compara a qualidade da recuperação antes e depois do re-ranking para 3 queries de teste.
 
 ---
 
 ## Rodando com Docker
 
-A partir de `projects/project-1/`:
-
 ```bash
 # Build da imagem
 docker build -t compliance-checker-api .
 
-# Run, expondo a porta e passando o .env
+# Run passando o .env
 docker run --rm -p 8000:8000 --env-file .env compliance-checker-api
 ```
 
-O `Dockerfile` usa `python:3.11-slim`, instala as dependências e sobe o `uvicorn` na porta `8000`.
+> **Atenção:** ao usar Docker, rode a ingestão antes do build ou monte o volume do `chroma_db/` no container.
 
 ---
 
+## Componentes novos (Projeto 2)
+
+### `src/rag/ingestion.py` — Pipeline de Ingestão
+
+Lê todos os arquivos da `knowledge_base/`, aplica chunking semântico com sobreposição e armazena os vetores no ChromaDB. Executável diretamente via `python src/rag/ingestion.py`.
+
+### `src/rag/retrieval.py` — Serviço de Recuperação com Re-ranking
+
+Dado um texto de query, busca os 20 chunks mais próximos no ChromaDB e aplica re-ranking combinando três sinais:
+
+```
+rerank_score = 0.5 × BM25
+             + 0.3 × cobertura de termos
+             + 0.2 × (1 / (1 + distância vetorial))
+```
+
+Retorna os top-5 chunks com metadados de fonte.
+
+### `src/api/schemas.py` — Schema Atualizado
+
+Adicionado o modelo `SourceReference` e o campo `sources` em `AnalysisResult`:
+
+```python
+class SourceReference(BaseModel):
+    source_document: str   # nome do arquivo de origem
+    source_chunk_id: int   # índice do chunk no documento
+    relevance_score: float # score pós re-ranking
+    excerpt: str           # preview do trecho usado
+```
+
+### `src/services/compliance_service.py` — Orquestrador RAG
+
+Refatorado para orquestrar o fluxo completo: recuperação → re-ranking → prompt enriquecido → LLM → resposta com fontes. Usa **Strict Grounding**: o LLM é instruído a basear a análise exclusivamente no contexto recuperado.
+
+---
 
 ## Próximos passos
 
-Esta API é a fundação para os próximos projetos do programa:
+- **Projeto 3 — Agente autônomo:** usará este serviço como uma das ferramentas disponíveis no `src/agents/`.
 
-- **Projeto 2 — RAG:** consumirá `knowledge_base/` e enriquecerá a análise com contexto regulatório.
-- **Projeto 3 — Agente autônomo:** usará este serviço como uma das ferramentas disponíveis.
-
-Decisões de arquitetura estão documentadas em [`docs/decisions.md`](docs/decisions.md).
-**Decisão:** usar FastAPI em vez de Flask ou Django.
-
-**Por quê:**
-- Geração automática de OpenAPI/Swagger a partir dos schemas Pydantic — entregável da API "documentada" sai de graça.
-- Validação de request/response baseada em Pydantic, alinhada com o resto do stack (LLM estruturado via `instructor`).
-- Suporte nativo a `async`, importante quando as chamadas ao LLM forem o gargalo.
-- Performance suficiente (ASGI + Starlette) sem o overhead de configuração do Django.
-
-**Alternativas consideradas:** Flask (síncrono, validação manual), Django REST (excesso de funcionalidades para um microsserviço focado).
-
----
-
-## 2. Pydantic como contrato único da API e da saída do LLM
-
-**Decisão:** os mesmos modelos Pydantic (`AnalysisRequest`, `AnalysisResult`) definem tanto o contrato HTTP quanto a estrutura que o LLM precisa devolver.
-
-**Por quê:**
-- **Fonte única da verdade.** Se o contrato muda, muda em um lugar só — request, response e prompt ficam sincronizados.
-- **Validação automática nos dois extremos.** O FastAPI rejeita payloads inválidos do cliente; o `instructor` rejeita respostas inválidas do LLM. O código de negócio só lida com dados já validados.
-- **Documentação grátis.** Descrições e `examples` nos campos aparecem no Swagger UI.
-
-**Trade-off:** acopla o formato da saída do LLM ao contrato externo. Se a API precisar evoluir sem mexer no prompt (ou vice-versa), será necessário separar em dois modelos.
-
----
-
-## 3. `instructor` para forçar saída estruturada do LLM
-
-**Decisão:** usar `instructor.from_openai(...)` para que o LLM devolva diretamente uma instância de `AnalysisResult`, em vez de fazer parse manual do texto.
-
-**Por quê:**
-- Elimina o ciclo "pede JSON → recebe markdown com ```json``` → extrai com regex → tenta `json.loads` → trata erro".
-- O `instructor` faz retry automático quando o modelo devolve algo que não casa com o schema.
-- Saída tipada já no consumidor — sem `dict` solto rodando pela aplicação.
-
-**Mitigação de risco:** `compliance_service.analyze_recommendation()` mantém um **fallback em três camadas** caso o `instructor` falhe:
-1. Chamada padrão pedindo JSON no prompt.
-2. Extração do primeiro objeto JSON via regex.
-3. Heurística textual (procura por "não" na resposta) + `AnalysisResult` de erro como último recurso.
-
-Assim, garantimos que o endpoint sempre devolve um `AnalysisResult` válido, mesmo em condições adversas.
-
----
-
-## 4. Wrapper `AzureModel` em `src/core/llm_client.py`
-
-**Decisão:** isolar toda a comunicação com o Azure OpenAI numa classe única, em vez de instanciar o SDK em cada serviço.
-
-**Por quê:**
-- **Centraliza configuração.** As variáveis de ambiente são lidas em um único ponto; falha rápido (com mensagem clara) se algo faltar.
-- **Centraliza compatibilidade.** O método `invoke()` já trata a diferença entre `max_completion_tokens` (modelos novos, ex.: gpt-4o no Azure) e `max_tokens` (modelos/rotas antigas) com fallback automático — o serviço de negócio não precisa saber disso.
-- **Trocabilidade.** Se um dia mudarmos para OpenAI direto, Anthropic ou Bedrock, a alteração fica restrita a esta classe. Os serviços continuam chamando `AzureModel().invoke(...)` ou um cliente equivalente.
-- **Testabilidade.** É trivial passar um mock de `AzureModel` para `compliance_service` em testes unitários.
-
----
-
-## 5. Separação em camadas: `api/`, `services/`, `core/`
-
-**Decisão:** organizar o código em três camadas com responsabilidades distintas.
-
-| Camada      | Responsabilidade                                                  |
-|-------------|-------------------------------------------------------------------|
-| `api/`      | Schemas (contratos HTTP) — Pydantic puro, sem lógica de negócio   |
-| `services/` | Lógica de negócio (montar prompt, orquestrar LLM, tratar erros)   |
-| `core/`     | Infra reutilizável (cliente LLM, configuração)                    |
-
-**Por quê:**
-- O endpoint em `main.py` fica magro — basicamente delega para o serviço.
-- O serviço pode ser chamado de outros contextos (CLI, agente do Projeto 3, job batch) sem arrastar o FastAPI junto.
-- Facilita testar a lógica de negócio sem subir um servidor HTTP.
-
----
-
-## 6. `python-dotenv` + `.env` para configuração
-
-**Decisão:** credenciais via arquivo `.env` carregado por `python-dotenv`, e não hard-coded ou passadas por flag.
-
-**Por quê:**
-- Padrão do ecossistema Python — qualquer dev já espera encontrar um `.env.example` ou instruções de `.env`.
-- `.env` no `.gitignore` evita vazamento acidental de chaves.
-- Funciona igual em desenvolvimento local e dentro do container Docker (via `--env-file .env`).
-
-**Para produção:** o `.env` deve ser substituído por um secret manager (Azure Key Vault, AWS Secrets Manager, variáveis injetadas pelo orquestrador). O `AzureModel` aceita os valores via construtor justamente para permitir essa troca sem mexer no código.
-
----
-
-## 7. Containerização com `python:3.11-slim`
-
-**Decisão:** imagem base `python:3.11-slim`, sem multi-stage build neste momento.
-
-**Por quê:**
-- `slim` reduz o tamanho da imagem sem o trabalho de manter uma base `alpine` (que costuma quebrar wheels de pacotes científicos).
-- Versão Python fixa (3.11) evita surpresas com mudanças de minor version.
-- Build simples e direto: `COPY requirements.txt` → `pip install` → `COPY .` → `CMD uvicorn`.
-
-**Evolução futura:**
-- Multi-stage build com etapa separada de `pip install` para diminuir a imagem final.
-- Usuário não-root no container.
-- Healthcheck no `Dockerfile` apontando para `GET /`.
-
----
-
-## 8. Health check em `GET /`
-
-**Decisão:** expor um endpoint mínimo `GET /` retornando status fixo, separado da rota de negócio.
-
-**Por quê:**
-- Probes de Kubernetes/load balancer precisam de uma rota leve e sem dependências externas (não pode bater no LLM a cada 5s).
-- Smoke test trivial: se `GET /` responde 200, o servidor subiu corretamente.
-
----
-
-## 9. Pastas reservadas para os próximos projetos
-
-**Decisão:** já criar `knowledge_base/`, `src/rag/` e `src/agents/` mesmo vazios.
-
-**Por quê:**
-- Sinaliza o roadmap diretamente na estrutura do repo.
-- Quando o Projeto 2 (RAG) começar, o ponto de extensão já está definido — sem precisar reabrir discussão sobre onde colocar o código.
-
----
-
-## Decisões em aberto
-
-- **Logging estruturado** (JSON) — hoje usamos `logging` padrão; revisar quando integrarmos a stack de observabilidade.
-- **Rate limiting** no endpoint `/analyze` — necessário antes de expor publicamente, para proteger a cota do Azure OpenAI.
-- **Cache de respostas** para prompts idênticos — pode reduzir custo significativamente em cenários de re-análise.
-- **Versionamento da API** (`/v1/analyze`) — adiar até a primeira mudança incompatível de contrato.
+Decisões de arquitetura estão documentadas em [`docs/architecture.md`](docs/architecture.md).
