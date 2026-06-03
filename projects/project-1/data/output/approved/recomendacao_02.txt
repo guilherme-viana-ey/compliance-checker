@@ -1,0 +1,2 @@
+PERFIL: conservador
+RECOMENDAÇÃO: Recomendo alocar o patrimônio do cliente em 70% Tesouro Direto (LTN e NTN-B), 20% em CDBs de bancos de grande porte com liquidez diária e 10% em fundos de renda fixa de baixo risco. A estratégia prioriza preservação de capital e liquidez, adequada ao perfil conservador do cliente.
