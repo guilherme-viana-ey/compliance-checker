@@ -1,0 +1,36 @@
+{
+  "timestamp": "2026-06-03T10:08:52.303297",
+  "total_documents": 2,
+  "automated": 2,
+  "manual_intervention_required": 0,
+  "automation_rate_pct": 100.0,
+  "results": [
+    {
+      "file": "recomendacao_01.txt",
+      "action": "REJEITADO_PARA_REVISAO",
+      "is_compliant": false,
+      "error": null,
+      "duration_seconds": 9.52,
+      "client_profile": "conservador",
+      "mentioned_products": [
+        "criptomoedas",
+        "Bitcoin",
+        "Ethereum",
+        "ações de empresas de tecnologia de alta volatilidade"
+      ]
+    },
+    {
+      "file": "recomendacao_02.txt",
+      "action": "APROVADO",
+      "is_compliant": true,
+      "error": null,
+      "duration_seconds": 5.3,
+      "client_profile": "conservador",
+      "mentioned_products": [
+        "Tesouro Direto (LTN e NTN-B)",
+        "CDBs de bancos de grande porte com liquidez diária",
+        "Fundos de renda fixa de baixo risco"
+      ]
+    }
+  ]
+}

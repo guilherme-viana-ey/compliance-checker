@@ -1,0 +1,21 @@
+[2026-06-03T10:08:47] ⚠️  ALERTA DE NÃO-CONFORMIDADE
+  Arquivo  : recomendacao_01.txt
+  Motivo   : A recomendação é claramente incompatível com os limites internos de exposição a criptoativos estabelecidos na política fornecida e, adicionalmente, não há qualquer indício de que o cliente possua perfil agressivo que comportaria sequer avaliação dessa alocação. O contexto também estabelece que o suitability deve ser respeitado e revisado periodicamente, o que reforça a inadequação de uma posição extremamente concentrada e volátil para um cliente conservador.
+  Produtos : criptomoedas, Bitcoin, Ethereum, ações de empresas de tecnologia de alta volatilidade
+  Fontes   : resol_030_cvm.pdf#1, politica_investimento_agressivo_v1.0.txt#2, analise_de_perfil_do_investidor.txt#9, politica_investimento_agressivo_v1.0.txt#3, resol_030_cvm.pdf#28
+  Ação     : Encaminhado para revisão manual em rejected_for_review/
+------------------------------------------------------------
+[2026-06-03T10:14:59] ⚠️  ALERTA DE NÃO-CONFORMIDADE
+  Arquivo  : teste_watch.txt
+  Motivo   : Arquivo inválido: 'utf-8' codec can't decode byte 0xff in position 0: invalid start byte
+  Produtos : N/A
+  Fontes   : N/A
+  Ação     : Encaminhado para revisão manual em rejected_for_review/
+------------------------------------------------------------
+[2026-06-03T10:17:00] ⚠️  ALERTA DE NÃO-CONFORMIDADE
+  Arquivo  : teste_aprovado.txt
+  Motivo   : Arquivo inválido: 'utf-8' codec can't decode byte 0xff in position 0: invalid start byte
+  Produtos : N/A
+  Fontes   : N/A
+  Ação     : Encaminhado para revisão manual em rejected_for_review/
+------------------------------------------------------------
