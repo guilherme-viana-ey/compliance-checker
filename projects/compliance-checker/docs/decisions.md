@@ -1,135 +1,143 @@
-# Decisões de Arquitetura — Compliance Checker API
-
-Este documento registra as principais escolhas técnicas do Projeto 1, com motivação e alternativas consideradas. Serve de referência para revisões futuras e para os Projetos 2 (RAG) e 3 (Agente), que vão se apoiar nesta base.
+# Decisões Arquiteturais — Etapa 3: Agentes Inteligentes
 
 ---
 
-## 1. FastAPI como framework web
+## 1. LangGraph como Orquestrador do Agente
 
-**Decisão:** usar FastAPI em vez de Flask ou Django.
+**Decisão:** usar LangGraph para modelar o fluxo do agente como um grafo de estados explícito.
 
 **Por quê:**
-- Geração automática de OpenAPI/Swagger a partir dos schemas Pydantic — entregável da API "documentada" sai de graça.
-- Validação de request/response baseada em Pydantic, alinhada com o resto do stack (LLM estruturado via `instructor`).
-- Suporte nativo a `async`, importante quando as chamadas ao LLM forem o gargalo.
-- Performance suficiente (ASGI + Starlette) sem o overhead de configuração do Django.
+- O fluxo de compliance tem bifurcações claras (aprovar vs. rejeitar) que mapeiam naturalmente para um grafo dirigido.
+- LangGraph torna o fluxo **visível e auditável** — cada nó é uma função pura com entrada e saída bem definidas.
+- O estado compartilhado (`ComplianceState`) centraliza todos os dados de uma execução, facilitando logging e rastreabilidade.
+- Alternativas como LangChain `AgentExecutor` ou loops manuais são menos estruturadas e mais difíceis de debugar em produção.
 
-**Alternativas consideradas:** Flask (síncrono, validação manual), Django REST (excesso de funcionalidades para um microsserviço focado).
+**Grafo implementado:**
+```
+START → read_document → analyze_compliance → [approve | reject] → END
+```
+
+**Trade-off:** LangGraph adiciona dependência ao projeto. Para fluxos simples como este, um pipeline sequencial manual seria suficiente. A escolha se justifica pela extensibilidade: o grafo pode crescer com novos nós (ex: escalation, notificação por email) sem reescrever a lógica central.
 
 ---
 
-## 2. Pydantic como contrato único da API e da saída do LLM
+## 2. Estado Imutável por Nó (Functional State Updates)
 
-**Decisão:** os mesmos modelos Pydantic (`AnalysisRequest`, `AnalysisResult`) definem tanto o contrato HTTP quanto a estrutura que o LLM precisa devolver.
+**Decisão:** cada nó retorna `{**state, ...novos_campos}` em vez de mutar o estado diretamente.
 
 **Por quê:**
-- **Fonte única da verdade.** Se o contrato muda, muda em um lugar só — request, response e prompt ficam sincronizados.
-- **Validação automática nos dois extremos.** O FastAPI rejeita payloads inválidos do cliente; o `instructor` rejeita respostas inválidas do LLM. O código de negócio só lida com dados já validados.
-- **Documentação grátis.** Descrições e `examples` nos campos aparecem no Swagger UI.
-
-**Trade-off:** acopla o formato da saída do LLM ao contrato externo. Se a API precisar evoluir sem mexer no prompt (ou vice-versa), será necessário separar em dois modelos.
+- Segue o padrão funcional do LangGraph, onde cada nó é uma transformação do estado.
+- Facilita debugging: é possível inspecionar o estado antes e depois de cada nó.
+- Evita efeitos colaterais inesperados entre nós executados em paralelo (caso o grafo seja expandido).
 
 ---
 
-## 3. `instructor` para forçar saída estruturada do LLM
+## 3. Separação entre Tools e Nós do Grafo
 
-**Decisão:** usar `instructor.from_openai(...)` para que o LLM devolva diretamente uma instância de `AnalysisResult`, em vez de fazer parse manual do texto.
+**Decisão:** as ações atômicas (ler arquivo, analisar, mover, alertar) ficam em `tools.py`, separadas dos nós do grafo em `compliance_agent.py`.
 
 **Por quê:**
-- Elimina o ciclo "pede JSON → recebe markdown com ```json``` → extrai com regex → tenta `json.loads` → trata erro".
-- O `instructor` faz retry automático quando o modelo devolve algo que não casa com o schema.
-- Saída tipada já no consumidor — sem `dict` solto rodando pela aplicação.
-
-**Mitigação de risco:** `compliance_service.analyze_recommendation()` mantém um **fallback em três camadas** caso o `instructor` falhe:
-1. Chamada padrão pedindo JSON no prompt.
-2. Extração do primeiro objeto JSON via regex.
-3. Heurística textual (procura por "não" na resposta) + `AnalysisResult` de erro como último recurso.
-
-Assim, garantimos que o endpoint sempre devolve um `AnalysisResult` válido, mesmo em condições adversas.
+- **Testabilidade:** as tools podem ser testadas unitariamente sem instanciar o grafo LangGraph.
+- **Reusabilidade:** as mesmas tools podem ser usadas por um agente LLM via Tool Calling (ex: função chamada pelo GPT-4) ou por um servidor MCP — sem duplicação de código.
+- **Separação de responsabilidades:** os nós orquestram (lógica de fluxo + logging), as tools executam (efeitos colaterais).
 
 ---
 
-## 4. Wrapper `AzureModel` em `src/core/llm_client.py`
+## 4. Guardrails de Segurança
 
-**Decisão:** isolar toda a comunicação com o Azure OpenAI numa classe única, em vez de instanciar o SDK em cada serviço.
+**Decisão:** implementar guardrails em múltiplas camadas para garantir que o agente opere dentro de limites seguros.
+
+**Guardrails implementados:**
+
+| Camada | Guardrail | Comportamento |
+|---|---|---|
+| `tools.py` | Extensão de arquivo | Rejeita arquivos que não sejam .txt ou .pdf |
+| `tools.py` | Tamanho máximo (500 KB) | Rejeita arquivos muito grandes |
+| `tools.py` | Conteúdo vazio | Rejeita arquivos sem texto extraível |
+| `watcher.py` | Arquivos temporários | Ignora arquivos começando com `.`, `~` ou `_` |
+| `watcher.py` | File settle delay | Aguarda 1.5s após criação para garantir escrita completa |
+| `compliance_agent.py` | Erro → rejeição | Qualquer erro no fluxo leva à rejeição (fail-safe) |
+| `compliance_agent.py` | Perfil padrão | Se o perfil não for identificado, usa "moderado" |
+
+**Princípio:** em caso de dúvida, rejeitar e alertar. É mais seguro para compliance rejeitar um caso ambíguo e escalar para revisão humana do que aprovar erroneamente.
+
+---
+
+## 5. Dois Modos de Operação: Batch e Watch
+
+**Decisão:** o runner suporta `--mode batch` (processa arquivos existentes) e `--mode watch` (monitora em tempo real).
 
 **Por quê:**
-- **Centraliza configuração.** As variáveis de ambiente são lidas em um único ponto; falha rápido (com mensagem clara) se algo faltar.
-- **Centraliza compatibilidade.** O método `invoke()` já trata a diferença entre `max_completion_tokens` (modelos novos, ex.: gpt-4o no Azure) e `max_tokens` (modelos/rotas antigas) com fallback automático — o serviço de negócio não precisa saber disso.
-- **Trocabilidade.** Se um dia mudarmos para OpenAI direto, Anthropic ou Bedrock, a alteração fica restrita a esta classe. Os serviços continuam chamando `AzureModel().invoke(...)` ou um cliente equivalente.
-- **Testabilidade.** É trivial passar um mock de `AzureModel` para `compliance_service` em testes unitários.
+- **Batch** é ideal para processar lotes de documentos históricos, testes e demonstrações.
+- **Watch** é o modo de produção real, onde o agente opera como daemon.
+- Separar os modos permite testar e validar o comportamento antes de colocar em produção contínua.
 
 ---
 
-## 5. Separação em camadas: `api/`, `services/`, `core/`
+## 6. Indicador de Automação
 
-**Decisão:** organizar o código em três camadas com responsabilidades distintas.
+**Decisão:** calcular e exibir o indicador de automação ao final de cada execução batch.
 
-| Camada      | Responsabilidade                                                  |
-|-------------|-------------------------------------------------------------------|
-| `api/`      | Schemas (contratos HTTP) — Pydantic puro, sem lógica de negócio   |
-| `services/` | Lógica de negócio (montar prompt, orquestrar LLM, tratar erros)   |
-| `core/`     | Infra reutilizável (cliente LLM, configuração)                    |
+**Fórmula:**
+```
+taxa_automacao = (documentos_aprovados + documentos_rejeitados_com_alerta) / total * 100
+```
+
+**Premissa do cálculo de eficiência:**
+- Uma análise manual de compliance leva em média 15 minutos por documento (revisão, consulta de normas, registro).
+- O agente processa em média em 3-5 segundos (tempo dominado pela chamada ao LLM).
+- Documentos rejeitados também são automáticos: o agente já moveu o arquivo e criou o alerta — o analista humano recebe o caso pré-triado, não do zero.
+
+**Exemplo com 20 documentos:**
+```
+Antes  : 20 × 15 min = 300 min (5h) de trabalho manual
+Depois : 1 × 15 min  = 15 min (apenas os casos com erro crítico)
+Ganho  : 285 min (4,75h) poupadas por lote
+```
+
+---
+
+## 7. Logging Estruturado
+
+**Decisão:** usar dois tipos de log complementares:
+1. `logging` padrão do Python (formato texto) para rastreabilidade em tempo real
+2. JSON estruturado (`data/logs/execution_*.json`) para auditoria e análise posterior
 
 **Por quê:**
-- O endpoint em `main.py` fica magro — basicamente delega para o serviço.
-- O serviço pode ser chamado de outros contextos (CLI, agente do Projeto 3, job batch) sem arrastar o FastAPI junto.
-- Facilita testar a lógica de negócio sem subir um servidor HTTP.
+- O log em texto é lido por humanos em tempo real (terminal, tail -f).
+- O JSON é consumido por ferramentas de análise (pandas, dashboards, ELK stack).
+- O campo `execution_logs` no `ComplianceState` registra cada passo da decisão para aquele documento específico — permite reconstruir exatamente o que aconteceu em uma análise.
 
 ---
 
-## 6. `python-dotenv` + `.env` para configuração
+## 8. Integração com o Projeto 2 (sem HTTP)
 
-**Decisão:** credenciais via arquivo `.env` carregado por `python-dotenv`, e não hard-coded ou passadas por flag.
+**Decisão:** o agente chama `analyze_recommendation()` diretamente (import Python), não via HTTP para `POST /analyze`.
 
 **Por quê:**
-- Padrão do ecossistema Python — qualquer dev já espera encontrar um `.env.example` ou instruções de `.env`.
-- `.env` no `.gitignore` evita vazamento acidental de chaves.
-- Funciona igual em desenvolvimento local e dentro do container Docker (via `--env-file .env`).
+- Elimina latência de rede e overhead de serialização HTTP para chamadas locais.
+- Evita dependência de a API estar rodando — o agente funciona standalone.
+- A função `analyze_recommendation` já tem a lógica completa de RAG + fallback.
 
-**Para produção:** o `.env` deve ser substituído por um secret manager (Azure Key Vault, AWS Secrets Manager, variáveis injetadas pelo orquestrador). O `AzureModel` aceita os valores via construtor justamente para permitir essa troca sem mexer no código.
+**Trade-off:** acopla o agente ao código do Projeto 2. Se a API evoluir para um serviço separado, a tool `tool_analyze_compliance` pode ser trocada para fazer uma chamada HTTP sem impactar o resto do agente.
 
 ---
 
-## 7. Containerização com `python:3.11-slim`
+## 9. watchdog para Monitoramento de Diretório
 
-**Decisão:** imagem base `python:3.11-slim`, sem multi-stage build neste momento.
+**Decisão:** usar a biblioteca `watchdog` para o modo watch, em vez de polling com `os.listdir` em loop.
 
 **Por quê:**
-- `slim` reduz o tamanho da imagem sem o trabalho de manter uma base `alpine` (que costuma quebrar wheels de pacotes científicos).
-- Versão Python fixa (3.11) evita surpresas com mudanças de minor version.
-- Build simples e direto: `COPY requirements.txt` → `pip install` → `COPY .` → `CMD uvicorn`.
-
-**Evolução futura:**
-- Multi-stage build com etapa separada de `pip install` para diminuir a imagem final.
-- Usuário não-root no container.
-- Healthcheck no `Dockerfile` apontando para `GET /`.
+- `watchdog` usa APIs nativas do SO (`inotify` no Linux, `FSEvents` no macOS, `ReadDirectoryChangesW` no Windows) — muito mais eficiente do que polling.
+- Detecta eventos de criação em milissegundos, sem consumir CPU constantemente.
+- API simples de `FileSystemEventHandler` é fácil de testar e de estender.
 
 ---
 
-## 8. Health check em `GET /`
+## Decisões em Aberto
 
-**Decisão:** expor um endpoint mínimo `GET /` retornando status fixo, separado da rota de negócio.
-
-**Por quê:**
-- Probes de Kubernetes/load balancer precisam de uma rota leve e sem dependências externas (não pode bater no LLM a cada 5s).
-- Smoke test trivial: se `GET /` responde 200, o servidor subiu corretamente.
-
----
-
-## 9. Pastas reservadas para os próximos projetos
-
-**Decisão:** já criar `knowledge_base/`, `src/rag/` e `src/agents/` mesmo vazios.
-
-**Por quê:**
-- Sinaliza o roadmap diretamente na estrutura do repo.
-- Quando o Projeto 2 (RAG) começar, o ponto de extensão já está definido — sem precisar reabrir discussão sobre onde colocar o código.
-
----
-
-## Decisões em aberto
-
-- **Logging estruturado** (JSON) — hoje usamos `logging` padrão; revisar quando integrarmos a stack de observabilidade.
-- **Rate limiting** no endpoint `/analyze` — necessário antes de expor publicamente, para proteger a cota do Azure OpenAI.
-- **Cache de respostas** para prompts idênticos — pode reduzir custo significativamente em cenários de re-análise.
-- **Versionamento da API** (`/v1/analyze`) — adiar até a primeira mudança incompatível de contrato.
+- **MCP Server:** expor as tools via FastMCP para que o agente possa ser orquestrado por um cliente MCP (ex: Claude Desktop). A estrutura está preparada — as tools em `tools.py` são funções puras prontas para serem registradas como ferramentas MCP.
+- **Observabilidade:** instrumentar com OpenTelemetry para rastrear latência por nó, tokens consumidos e taxa de erro. LangSmith pode ser integrado diretamente ao LangGraph.
+- **Retry automático:** adicionar retry com backoff exponencial na tool `tool_analyze_compliance` para lidar com falhas transitórias da API Azure OpenAI.
+- **Notificação real:** trocar o log de alertas por uma notificação real (email via SendGrid, Teams webhook, Slack) para os casos rejeitados.
+- **Threshold de confiança:** adicionar um campo `confidence_score` na análise e criar um terceiro caminho: casos de baixa confiança vão para revisão mesmo que `is_compliant=True`.
