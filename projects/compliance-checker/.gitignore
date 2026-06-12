@@ -37,3 +37,12 @@ docker-compose.yml
 
 # RAG / Vector DB
 chroma_db/
+
+
+# Ignorar tudo dentro das pastas
+data/logs/*
+data/output/*
+
+# EXCETO manter as pastas (via .gitkeep)
+!data/logs/.gitkeep
+!data/output/.gitkeep
