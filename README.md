@@ -46,7 +46,7 @@ O sistema foi construído em três etapas progressivas, cada uma adicionando uma
 
 ---
 
-### Projeto 1 — API Base
+### Etapa 1 — API Base
 
 **O problema:** criar uma API que analisa recomendações de investimento usando um LLM.
 
@@ -64,7 +64,7 @@ Cliente HTTP → POST /analyze → FastAPI → compliance_service → Azure Open
 
 ---
 
-### Projeto 2 — RAG com Re-ranking
+### Etapa 2 — RAG com Re-ranking
 
 **O problema:** a análise precisa ser baseada em documentos oficiais reais, não em conhecimento genérico do LLM.
 
@@ -93,7 +93,7 @@ Azure OpenAI → AnalysisResult + sources
 
 ---
 
-### Projeto 3 — Agente Autônomo
+### Etapa 3 — Agente Autônomo
 
 **O problema:** o processo ainda dependia de intervenção humana para acionar a API.
 
